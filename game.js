@@ -57,7 +57,7 @@ class Bullet {
   }
 }
 
-// ── Potenciador de velocidad ───────────────────────────────────────────────────
+// ── Potenciadores ──────────────────────────────────────────────────────────────
 class SpeedPowerUp {
   constructor(x, y) {
     this.x      = x;
@@ -65,6 +65,7 @@ class SpeedPowerUp {
     this.radius = 14;
     this.phase  = 0;
     this.dead   = false;
+    this.type   = 'speed';
   }
 
   update(dt) {
@@ -97,6 +98,58 @@ class SpeedPowerUp {
     ctx.lineTo( 6,   -1);
     ctx.lineTo( 1,   -1);
     ctx.closePath();
+    ctx.stroke();
+
+    ctx.restore();
+  }
+}
+
+// ── Potenciador de escudo ──────────────────────────────────────────────────────
+class ShieldPowerUp {
+  constructor(x, y) {
+    this.x      = x;
+    this.y      = y;
+    this.radius = 14;
+    this.phase  = 0;
+    this.dead   = false;
+    this.type   = 'shield';
+  }
+
+  update(dt) {
+    this.phase += dt;
+  }
+
+  draw() {
+    const pulse = 1 + Math.sin(this.phase * 4) * 0.15;
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.scale(pulse, pulse);
+
+    // Anillo sutil
+    ctx.strokeStyle = 'rgba(0,200,255,0.35)';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.arc(0, 0, 15, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Silueta de escudo
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth   = 1.8;
+    ctx.lineJoin    = 'round';
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo( 10, -8);
+    ctx.lineTo(-10, -8);
+    ctx.lineTo( -9,  4);
+    ctx.lineTo(  0, 12);
+    ctx.lineTo(  9,  4);
+    ctx.closePath();
+    ctx.stroke();
+
+    // Divisoria superior
+    ctx.beginPath();
+    ctx.moveTo(-9, -3);
+    ctx.lineTo( 9, -3);
     ctx.stroke();
 
     ctx.restore();
@@ -257,6 +310,8 @@ class Ship {
     this.shootCooldown = 0;
     this.speedTimer    = 0;
     this.dead          = false;
+    this.shieldDuration = 0;
+    this.shieldPhase    = 0;
   }
 
   update(dt) {
@@ -264,6 +319,8 @@ class Ship {
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.speedTimer    > 0) this.speedTimer    -= dt;
+    if (this.shieldDuration > 0) this.shieldDuration -= dt;
+    this.shieldPhase += dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = 260;  // px/s²
@@ -327,6 +384,20 @@ class Ship {
       ctx.stroke();
     }
 
+    // Escudo activo
+    if (this.shieldDuration > 0) {
+      const pulse = 1 + Math.sin(this.shieldPhase * 5) * 0.06;
+      ctx.strokeStyle = 'rgba(0,200,255,0.7)';
+      ctx.lineWidth   = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, 24 * pulse, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(0,200,255,0.3)';
+      ctx.beginPath();
+      ctx.arc(0, 0, 19, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 }
@@ -369,6 +440,7 @@ let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
 let powerTimer;
+let shieldTimer;
 let shootingStarTimer;
 
 function spawnAsteroids(count) {
@@ -395,6 +467,7 @@ function initGame() {
   level  = 1;
   state  = 'playing';
   powerTimer = 5;
+  shieldTimer = rand(7, 12);
   shootingStarTimer = rand(8, 15);
   spawnAsteroids(4);
 }
@@ -406,6 +479,7 @@ function nextLevel() {
   powerUps  = [];
   shootingStars = [];
   powerTimer = 5;
+  shieldTimer = rand(7, 12);
   shootingStarTimer = rand(8, 15);
   ship.reset();
   spawnAsteroids(3 + level);
@@ -418,6 +492,15 @@ function spawnSpeedPowerUp() {
     y = rand(0, H);
   } while (Math.hypot(x - ship.x, y - ship.y) < 130);
   powerUps.push(new SpeedPowerUp(x, y));
+}
+
+function spawnShieldPowerUp() {
+  let x, y;
+  do {
+    x = rand(0, W);
+    y = rand(0, H);
+  } while (Math.hypot(x - ship.x, y - ship.y) < 130);
+  powerUps.push(new ShieldPowerUp(x, y));
 }
 
 function spawnShootingStar() {
@@ -510,6 +593,13 @@ function update(dt) {
     powerTimer = 5;
   }
 
+  // Generar potenciador de escudo
+  shieldTimer -= dt;
+  if (shieldTimer <= 0 && powerUps.length === 0) {
+    spawnShieldPowerUp();
+    shieldTimer = rand(12, 18);
+  }
+
   // Generar estrella fugaz
   shootingStarTimer -= dt;
   if (shootingStarTimer <= 0 && shootingStars.length === 0) {
@@ -554,29 +644,46 @@ function update(dt) {
 
   // Nave vs asteroide
   if (ship.invincible <= 0) {
+    const shieldSplits = [];
     for (const a of asteroids) {
-      if (dist(ship, a) < ship.radius + a.radius * 0.82) {
-        killShip();
-        break;
+      if (!a.dead && dist(ship, a) < ship.radius + a.radius * 0.82) {
+        if (ship.shieldDuration > 0) {
+          a.dead = true;
+          score += POINTS[a.size];
+          explode(a.x, a.y, a.size * 5);
+          shieldSplits.push(...a.split());
+        } else {
+          killShip();
+          break;
+        }
       }
     }
+    asteroids = asteroids.filter(a => !a.dead).concat(shieldSplits);
   }
 
   // Nave vs estrella fugaz
   if (ship.invincible <= 0) {
     for (const s of shootingStars) {
       if (!s.dead && dist(ship, s) < ship.radius + s.radius) {
-        killShip();
-        break;
+        if (ship.shieldDuration > 0) {
+          s.dead = true;
+          score += 200;
+          explode(s.x, s.y, 12);
+        } else {
+          killShip();
+          break;
+        }
       }
     }
+    shootingStars = shootingStars.filter(s => !s.dead);
   }
 
-  // Nave vs power-up de velocidad
+  // Nave vs power-ups
   for (const p of powerUps) {
     if (!p.dead && dist(ship, p) < ship.radius + p.radius) {
       p.dead = true;
-      ship.speedTimer = 5;
+      if (p.type === 'speed')  ship.speedTimer = 5;
+      if (p.type === 'shield') ship.shieldDuration = 5;
       explode(ship.x, ship.y, 8);
     }
   }
@@ -622,6 +729,13 @@ function drawHUD() {
     ctx.textAlign = 'left';
     ctx.fillStyle = '#fff';
     ctx.fillText(`VELOCIDAD x2  ${ship.speedTimer.toFixed(1)}s`, 14, H - 18);
+  }
+
+  // Indicador de escudo activo
+  if (ship.shieldDuration > 0) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(0,200,255,0.95)';
+    ctx.fillText(`ESCUDO  ${ship.shieldDuration.toFixed(1)}s`, W / 2, H - 18);
   }
 
   // Indicador de estrella fugaz activa
